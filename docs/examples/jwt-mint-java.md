@@ -1,8 +1,12 @@
-# JWT Minting — Java
+# SSO Token Minting — Java
 
-A minimal example of minting the `ssoToken` JWT the JS widget will pass on every backend request. Server-side only — never ship the agent secret to the browser.
+A minimal example of minting the **SSO token** the JS widget needs. Your page hands
+this token to `window.antrika('syncUser', …)`, which establishes the visitor's
+session (see [widget auth](../integrations/widget.md#auth)). Server-side only —
+never ship the SSO signing key to the browser.
 
-This example uses the `io.jsonwebtoken:jjwt` library; any HS256-capable JWT library will work.
+This example uses the `io.jsonwebtoken:jjwt` library; any HS256-capable JWT library
+will work.
 
 ## Dependency
 
@@ -42,19 +46,20 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
-public final class TableAiTokenMinter {
+public final class SsoTokenMinter {
 
-    // From admin → AI Agents → your agent → Show secret. Server-only.
+    // From admin → SSO settings. The tenant SSO signing key — NOT the agent API key.
     private final SecretKey signingKey;
 
-    public TableAiTokenMinter(String agentSecret) {
-        this.signingKey = Keys.hmacShaKeyFor(agentSecret.getBytes(StandardCharsets.UTF_8));
+    public SsoTokenMinter(String ssoSigningKey) {
+        this.signingKey = Keys.hmacShaKeyFor(ssoSigningKey.getBytes(StandardCharsets.UTF_8));
     }
 
     public String mint(User user, Account account, long ttlSeconds) {
         Instant now = Instant.now();
         return Jwts.builder()
-            .subject(user.id())
+            // the user-id claim is `id`, NOT the standard `sub`
+            .claim("id",    user.id())
             .claim("name",  user.name())
             .claim("email", user.email())
             .claim("companies", List.of(Map.of(
@@ -78,24 +83,27 @@ public final class TableAiTokenMinter {
 
 ## Expose to your page (Spring Boot)
 
+Return the `customerId` (your tenant id) alongside the token — `syncUser` needs both:
+
 ```java
 @RestController
 @RequestMapping("/me")
-public class TableAiTokenController {
+public class SsoTokenController {
 
-    private final TableAiTokenMinter minter =
-        new TableAiTokenMinter(System.getenv("TABLEAI_AGENT_SECRET"));
+    private final SsoTokenMinter minter =
+        new SsoTokenMinter(System.getenv("TABLEARTH_SSO_KEY"));
+    private final String tenantId = System.getenv("TABLEARTH_TENANT_ID");
 
     @GetMapping("/tableai-token")
     public Map<String, Object> token(@AuthenticationPrincipal MyUser principal) {
-        var user = new TableAiTokenMinter.User(
+        var user = new SsoTokenMinter.User(
             principal.getId(), principal.getName(), principal.getEmail(), Map.of()
         );
-        var account = new TableAiTokenMinter.Account(
+        var account = new SsoTokenMinter.Account(
             principal.getAccountId(), principal.getAccountName(), Map.of()
         );
         var jwt = minter.mint(user, account, 3600);
-        return Map.of("token", jwt, "expiresIn", 3600);
+        return Map.of("token", jwt, "customerId", tenantId, "expiresIn", 3600);
     }
 }
 ```
@@ -105,29 +113,35 @@ public class TableAiTokenController {
 ```html
 <div class="antrika-table-ai-widget"
      data-id="agt_xxx"
-     data-remote-id="report:attendance:2026-05-08:cust-123"></div>
+     data-report-name="Attendance Yesterday"></div>
 
-<script src="https://widget.antrika.com/app.js"></script>
+<script src="https://<your-widget-host>/app.js"></script>
 <script>
   fetch('/me/tableai-token', { credentials: 'include' })
     .then(r => r.json())
-    .then(({ token }) => {
-      window.antrika('renderTableAI', {
-        widgetId: 'agt_xxx',
-        ssoToken: token
+    .then(({ token, customerId }) => {
+      window.antrika('syncUser', { customerId, token }, () => {
+        window.antrika('renderTableAI', {
+          widgetId:        'agt_xxx',
+          remoteSessionId: 'report:attendance:2026-05-08:cust-123'
+        });
       });
     });
 </script>
 ```
 
+> Use `syncUserLocal` instead of `syncUser` against a local/dev tenant.
+
 ## Refreshing
 
-Mint short (≤ 1 hour). Refresh ~5 minutes before `exp`:
+There is no `setSsoToken` call. Mint short (≤ 1 hour) and re-establish the session
+before `exp` by minting a fresh token and calling `syncUser` again:
 
 ```javascript
 async function refresh() {
-  const { token, expiresIn } = await fetch('/me/tableai-token').then(r => r.json());
-  window.antrika('setSsoToken', { widgetId: 'agt_xxx', ssoToken: token });
+  const { token, customerId, expiresIn } =
+    await fetch('/me/tableai-token').then(r => r.json());
+  window.antrika('syncUser', { customerId, token });
   setTimeout(refresh, (expiresIn - 300) * 1000);
 }
 refresh();
@@ -135,6 +149,7 @@ refresh();
 
 ## Don't
 
-- **Don't** load `TABLEAI_AGENT_SECRET` from a config file shipped with the front-end build.
+- **Don't** load `TABLEARTH_SSO_KEY` from a config file shipped with the front-end build.
+- **Don't** confuse the SSO signing key with the agent **API key** — different credentials.
 - **Don't** sign with `none` / unsigned tokens — the backend rejects them.
-- **Don't** hard-code the secret in test fixtures committed to git.
+- **Don't** hard-code the key in test fixtures committed to git.

@@ -1,4 +1,4 @@
-# Contributing to TableAI Docs
+# Contributing to tableArth.ai Docs
 
 These docs describe a real product surface; readers will paste code from them into production. Edits should hold to that.
 
@@ -20,7 +20,6 @@ docs/
 ├── integrations/
 │   ├── widget.md
 │   ├── chrome-extension.md
-│   ├── excel-addin.md
 │   └── api.md
 ├── api/
 │   ├── auth.md

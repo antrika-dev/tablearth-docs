@@ -12,7 +12,11 @@ apiKey: <your-api-key>
 
 Plus the `Origin` header your HTTP client sets automatically. The agent's allow-list controls which Origins (or IPs, if you set `apikey.ip`) can use the key.
 
-Get the key from your tenant admin: **Admin → Agents → your TableAI agent → API Keys → Create**.
+Get the key from your tenant admin: **Admin → Agents → your tableArth.ai agent → API Keys → Create**.
+
+> Need **per-user** attribution rather than the service-wide key? The `/v2` routes
+> (`init/v2`, `upload/v2`, `chat/v2`) additionally accept a host-minted `ssoToken`
+> JWT header. See [auth.md](../api/auth.md#per-user-identity-on-api-routes-v2).
 
 Full auth detail: [api/auth.md](../api/auth.md).
 
@@ -170,9 +174,9 @@ boolean fileAvailable = init.getAsJsonObject("sessionData").get("fileAvailable")
 
 // 2. upload (if needed) — skipped here for brevity; use a multipart library
 
-// 3. chat (non-streaming)
-String body = "{\"data\":{\"sessionId\":\"" + sessionId + "\","
-            + "\"query\":\"Who worked the most?\",\"stream\":false}}";
+// 3. chat (non-streaming) — API-key body is FLAT, not wrapped in `data`
+String body = "{\"sessionId\":\"" + sessionId + "\","
+            + "\"query\":\"Who worked the most?\",\"stream\":false}";
 HttpRequest chatReq = HttpRequest.newBuilder()
     .uri(URI.create(base + "/emp/1/api/tableai/chat"))
     .header("apiKey", apiKey)
@@ -191,6 +195,6 @@ System.out.println(chatRes.body());
 
 ## Rate limits
 
-Per-tenant, defined by the customer's plan. Hitting the limit returns `429`. Plan-bound features are also gated — base TableAI access plus a separate API access flag must both be enabled on your tenant.
+Per-tenant, defined by the customer's plan. Hitting the limit returns `429`. Plan-bound features are also gated — base data-query access (`agent-data-query`) plus the API access flag (`apiAccess`) must both be enabled on your tenant.
 
 If you get `403 "This feature is not available at the moment"`, your tenant's plan needs the relevant feature enabled. Contact your account manager.

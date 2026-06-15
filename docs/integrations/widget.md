@@ -1,54 +1,101 @@
 # JS Widget Integration
 
-Embed TableAI next to any table in your web product. The user clicks an AI button → a chat dialog opens against the report's data.
+Embed tableArth.ai next to any table in your web product. The user clicks an AI
+button → a chat dialog opens against the report's data.
 
 ## TL;DR — minimum integration
 
 ```html
-<!-- 1. one div per table -->
+<!-- 1. load the bundle -->
+<link  href="https://<your-widget-host>/app.<hash>.css" rel="stylesheet">
+<script src="https://<your-widget-host>/app.<hash>.js"></script>
+
+<!-- 2. one div per table -->
 <div class="antrika-table-ai-widget"
      data-id="WIDGET_ID"
-     data-remote-id="report:attendance:2026-05-08"
      data-report-name="Attendance Yesterday"></div>
 
-<!-- 2. the bundle -->
-<link  href="https://widget.antrika.com/app.<hash>.css" rel="stylesheet">
-<script src="https://widget.antrika.com/app.<hash>.js"></script>
-
-<!-- 3. boot the widget -->
+<!-- 3. authenticate the visitor, then mount -->
 <script>
-  window.antrika('renderTableAI', {
-    widgetId: 'WIDGET_ID',           // = the agent ID issued by your admin
-    ssoToken: 'eyJhbGciOiJIUzI1Ni…', // JWT minted by your server (see "Auth")
-    remoteId: 'report:attendance:2026-05-08'
+  // (a) establish the SSO session for the signed-in visitor
+  window.antrika('syncUser', {
+    customerId: 'YOUR_TENANT_ID',
+    token:      'eyJhbGciOiJIUzI1Ni…'   // JWT your server mints (see "Auth")
+  }, function () {
+    // (b) mount the widget once the session exists
+    window.antrika('renderTableAI', {
+      widgetId:        'WIDGET_ID',
+      remoteSessionId: 'report:attendance:2026-05-08',
+      reportName:      'Attendance Yesterday'
+    });
   });
 </script>
 ```
 
-That's it for the host page. Three things: a div, the bundle, one JS call.
+Three things: the bundle, a div, and a `syncUser` → `renderTableAI` pair.
 
-## What the host needs to provide
+## What the host provides
 
-| Field | Required? | Where it comes from | What it's used for |
-|---|---|---|---|
-| `widgetId` | yes | Admin → Agents → copy the agent ID | Tells the backend which agent + tenant |
-| `ssoToken` | yes | Your server mints a JWT signed with the agent's secret | Identifies the visitor (account / user) |
-| `remoteId` | recommended | Your code | Stable session key — same value resumes the chat |
-| `csv` | optional | Your code | Used to derive the session key when `remoteId` is absent |
-| `reportName` | optional | Your code or `data-report-name` | Shows in the dialog title |
-| `theme` | optional | `'LIGHT'` (default) or `'DARK'` | Widget appearance |
+### On the mount `<div>`
 
-If both `remoteId` and `csv` are omitted the widget falls back to a hash of `widgetId + URL`. Functional but you'll lose chat resume after navigation.
+| Attribute | Required? | What it's for |
+|---|---|---|
+| `class="antrika-table-ai-widget"` | yes | Marks the element the widget mounts into. |
+| `data-id` | yes | The agent / widget ID. Must equal the `widgetId` you pass to `renderTableAI`. |
+| `data-report-name` | optional | Dialog title. Falls back to the `reportName` render argument. |
 
-## Auth — minting the SSO token
+### To `renderTableAI(options)`
 
-The widget itself never holds tenant credentials. Your server mints a short-lived JWT once per page load (or per session) using the agent's shared secret (visible in admin → Agents → *Show secret*).
+| Field | Required? | What it's used for |
+|---|---|---|
+| `widgetId` | yes | Tells the backend which agent + tenant. Matched against each div's `data-id`. |
+| `remoteSessionId` | recommended | Stable session key — same value resumes the chat. See [concepts](../concepts.md#remoteid--remotesessionid). |
+| `csvFile` | optional | Raw CSV string. Used to derive the session key when `remoteSessionId` is absent. |
+| `reportName` | optional | Dialog title (or set `data-report-name`). |
+| `theme` | optional | `'LIGHT'` (default) or `'DARK'`. |
+
+> There is **no `ssoToken` argument** to `renderTableAI`. The visitor's identity
+> comes from the SSO session established by `syncUser` (below), not from a token
+> you hand the render call.
+
+Advanced options (`reportContext`, `chatContext`, `sessionId`, `selectedModule`,
+`btnStyle`, `tableRef`, `reportTableJson`) exist for tighter host integrations;
+most embeds don't need them.
+
+If both `remoteSessionId` and `csvFile` are omitted, chat resume after navigation
+is lost — pass at least one.
+
+## Auth
+
+The widget authenticates in two steps. Your server mints a short-lived JWT; the
+page hands it to `syncUser`; the backend turns it into an SSO session (a cookie)
+that the widget rides on every request.
+
+```
+your server                browser (page)                 tableArth.ai backend
+     │                           │                                 │
+  mint JWT  ──── token ────►  syncUser(customerId, token) ───────► verify JWT
+                               │                          ◄─ Set-Cookie: antrikaSSO
+                               │                                 │
+                          renderTableAI(...)                     │
+                               │   widget signs each request     │
+                               │   (widget_id + per-widget token │
+                               │    + antrikaSSO cookie) ───────► init / upload / chat
+```
+
+The per-request signing is internal to the bundle — **you don't compute it.**
+Your only job is to (1) mint the JWT and (2) call `syncUser`.
+
+### Step 1 — mint the SSO token (server-side)
+
+The token is an **HS256 JWT** signed with your tenant's **SSO signing key**
+(admin → SSO settings). Never embed that key in the page.
 
 Required claims:
 
 ```json
 {
-  "sub":   "user-id-in-your-system",
+  "id":    "user-id-in-your-system",
   "name":  "Full Name",
   "email": "user@example.com",
   "companies": [
@@ -59,35 +106,55 @@ Required claims:
 }
 ```
 
-- Algorithm: **HS256**.
-- Recommended TTL: **≤ 1 hour**.
-- Sign on your server. Never embed the agent secret in the page or in any JS bundle.
+| Claim | Required | Notes |
+|---|---|---|
+| `id` | yes | Stable user ID in your system (the user identifier — **not** `sub`). |
+| `name` | yes | Display name. |
+| `email` | yes | User email. |
+| `companies` | yes | ≥ 1 `{ id, name }` — maps to a backend Account. |
+| `iat` / `exp` | yes | Issued-at / expiry, unix seconds. Keep TTL short (≤ 1 hour). |
+| `thumb` | optional | Avatar URL. |
+| `timezone` | optional | IANA tz, e.g. `Asia/Kolkata`. |
+| `tags` | optional | Array of strings (user licenses / labels). |
+| `customFields` | optional | `{ key: value }`; also valid per-company as `companies[].customFields`. |
 
-Examples:
+Examples: [Node.js](../examples/jwt-mint-node.md) · [Java](../examples/jwt-mint-java.md).
 
-- [Node.js](../examples/jwt-mint-node.md)
-- [Java](../examples/jwt-mint-java.md)
+### Step 2 — establish the session
 
-The widget passes the JWT verbatim as the `ssoToken` header on every backend request. The backend validates it with the agent's secret and binds the resulting account/user to the session.
+```js
+window.antrika('syncUser', {
+  customerId: 'YOUR_TENANT_ID',   // your tenant / customer id (from admin)
+  token:      mintedJwt            // the JWT from step 1
+}, onReady);
+```
 
-## How `remoteId` works
+`syncUser` posts to the production host; use **`syncUserLocal`** for local/dev
+tenants. On success the backend creates/fetches the User + Account from the
+claims and sets the `antrikaSSO` cookie. Mount the widget in the callback so the
+cookie exists before the first request.
 
-Read [concepts.md](../concepts.md#remoteid--remotesessionid) for the full picture. Quick rules for the widget:
+### Refreshing
 
-- Pass a **stable identity** when you have one. Examples that work well:
+The SSO session lives in the `antrikaSSO` cookie. To refresh before the visitor's
+token expires, mint a fresh JWT and call `syncUser` again — the cookie is
+re-issued. There is no separate `setSsoToken` call.
+
+## How `remoteSessionId` works
+
+Read [concepts.md](../concepts.md#remoteid--remotesessionid) for the full picture.
+For the widget:
+
+- Pass a **stable identity** when you have one:
   - `report:attendance:2026-05-08:cust-123`
   - `dashboard:sales-pipeline:weekly:cust-123`
-  - `kpi-board:executive:cust-123:rev=42`
-- Re-key (mint a new `remoteId`) when the dataset changes meaningfully:
-  - New time window
-  - User changed filters
-  - Backing data refreshed
-- If you only have the CSV in hand, omit `remoteId` and pass `csv` — the widget hashes it.
-
-The widget converts whatever you give it to a `remoteSessionId` like:
+- Re-key (mint a new value) when the dataset changes meaningfully (new time
+  window, changed filters, refreshed data).
+- If you only have the CSV, omit `remoteSessionId` and pass `csvFile` — the widget
+  hashes it:
 
 ```
-remoteSessionId = 'tai-w-' + (remoteId ?? sha256(csv).slice(0, 32))
+remoteSessionId = sha256(csvFile).slice(0, 48)   // 48 hex chars, no prefix
 ```
 
 ## Lifecycle inside the widget
@@ -95,81 +162,89 @@ remoteSessionId = 'tai-w-' + (remoteId ?? sha256(csv).slice(0, 32))
 ```
 mount  ─► render AI button (no network yet)
 click  ─► open dialog
-        ─► init   (sends widgetId, ssoToken, remoteSessionId)
+        ─► widget/init   (widget_id + signed request + antrikaSSO cookie)
             ├ fileAvailable=true  → render past messages, wait for user
-            └ fileAvailable=false → upload (multipart csv) → continue
+            └ fileAvailable=false → widget/upload (multipart csv) → continue
 type a query, press Send
-        ─► chat   (body { sessionId, query, stream:true })
-            stream chunks: TEXT* CHART? DONE
+        ─► widget/chat   (body { data: { sessionId, query, stream:true } })
+            stream chunks: STATUS TEXT* CHART? DONE
 optional dashboard tab
-        ─► dashboard/spec
-        ─► dashboard/widget/data
+        ─► widget/dashboard/spec
+        ─► widget/dashboard/widget/data
 ```
 
-Endpoint reference: [api/endpoints.md](../api/endpoints.md).
+The widget uses its **own** dashboard routes (`/widget/dashboard/*`), not the
+API-key `/api/dashboard/*` ones. Endpoint reference:
+[api/endpoints.md](../api/endpoints.md#widget-endpoints).
+
+> The widget `chat` body is wrapped in a top-level `data` field
+> (`{ "data": { … } }`). The API-key `chat` route is **not** — see
+> [endpoints.md](../api/endpoints.md#post-emp1apitableaichat).
 
 ## Multiple tables on one page
 
-Repeat the div per table. The widget mounts independently for each match against `data-id`:
+Repeat the div per table. The widget mounts independently for each `data-id`
+match:
 
 ```html
-<div class="antrika-table-ai-widget"
-     data-id="WIDGET_ID"
-     data-remote-id="report:attendance:2026-05-08"></div>
+<div class="antrika-table-ai-widget" data-id="WIDGET_ID"
+     data-report-name="Attendance"></div>
 
 <!-- ...other markup, another table... -->
 
-<div class="antrika-table-ai-widget"
-     data-id="WIDGET_ID"
-     data-remote-id="report:leaves:2026-05-08"></div>
+<div class="antrika-table-ai-widget" data-id="WIDGET_ID"
+     data-report-name="Leaves"></div>
 
 <script>
-  window.antrika('renderTableAI', { widgetId: 'WIDGET_ID', ssoToken: '…' });
+  // pass a distinct remoteSessionId per table via your own mount logic,
+  // or let each derive its key from the csvFile you hand it.
+  window.antrika('renderTableAI', { widgetId: 'WIDGET_ID' });
 </script>
 ```
 
-The `renderTableAI` call is idempotent — it skips divs that have already been mounted.
+`renderTableAI` is idempotent — it skips divs already marked
+`data-antrika-mounted="1"`.
 
 ## Theming
 
-Pick `LIGHT` or `DARK` via the `theme` argument. To override colours fully, the widget reads a small set of CSS variables:
+Pick `LIGHT` or `DARK` via the `theme` argument. To override colours, the widget
+reads CSS variables it sets on `:root`; the most useful:
 
 ```css
 :root {
-  --widget-body-primary:      #036DCE;   /* primary blue used for icons / send button */
+  --widget-body-primary:      #036DCE;   /* primary colour: icons / send button */
   --widget-body-primary-dark: #00218D;
-  --widget-brand-danger:      #E34F45;
+  --widget-text-primary:      #1a1a1a;
 }
 ```
 
-Set these on `:root` of the host page or under any selector that wraps the widget container.
+## Branding
 
-## Refreshing the SSO token
-
-JWTs expire. Refresh proactively (e.g. when ~5 minutes remain) using the runtime helper:
-
-```js
-window.antrika('setSsoToken', { widgetId: 'WIDGET_ID', ssoToken: 'newJwt…' });
-```
-
-The widget uses the new token on the next request. In-flight requests are unaffected.
+A "Powered by" footer shows by default. Tenants on a plan that includes the
+`hidePoweredBy` feature can disable it (admin setting `hidePoweredByAntrika`),
+which also removes the watermark from PDF exports.
 
 ## Gotchas
 
-- **Origin must be in the agent's allow-list.** A request from `https://app.example.com` to an agent that only allows `https://example.com` returns `403 Not authorised`. Globs work: `https://*.example.com`.
-- **Same `remoteId` across tenants would share a session.** Include a tenant prefix (`cust-123:`) in your `remoteId` if your code paths could possibly collide.
-- **JWT must be valid when sent.** Refresh before the `exp` claim using the helper above.
-- **CSV upload is multipart**, so it triggers a CORS preflight. The widget endpoint handles `OPTIONS` automatically — no host config needed.
+- **No SSO session, no data.** If `syncUser` hasn't run (or the `antrikaSSO`
+  cookie is missing/expired), `init`/`chat` fail. Mount in the `syncUser` callback.
+- **Origin must be in the agent's allow-list.** A request from
+  `https://app.example.com` to an agent that only allows `https://example.com`
+  returns `403`. Globs work: `https://*.example.com`.
+- **Sign the JWT with the SSO key, not the agent API key.** The two are different
+  credentials.
+- **`widget_id` must be set.** Requests without it skip signing and fail auth —
+  always pass `widgetId` (and the matching `data-id`).
+- **CSV upload is multipart**, so it triggers a CORS preflight. The widget
+  endpoint handles `OPTIONS` automatically — no host config needed.
 
 ## Worked example
-
-A full HTML page that renders two reports with their own AI buttons:
 
 ```html
 <!doctype html>
 <html>
 <head>
-  <link href="https://widget.antrika.com/app.css" rel="stylesheet">
+  <link href="https://<your-widget-host>/app.css" rel="stylesheet">
 </head>
 <body>
   <h1>Daily Reports</h1>
@@ -179,30 +254,26 @@ A full HTML page that renders two reports with their own AI buttons:
     <table id="att-yest">…</table>
     <div class="antrika-table-ai-widget"
          data-id="agt_xxx"
-         data-remote-id="report:attendance:2026-05-08:cust-123"
          data-report-name="Attendance Yesterday"></div>
   </section>
 
-  <section>
-    <h2>Leaves — Yesterday</h2>
-    <table id="lvs-yest">…</table>
-    <div class="antrika-table-ai-widget"
-         data-id="agt_xxx"
-         data-remote-id="report:leaves:2026-05-08:cust-123"
-         data-report-name="Leaves Yesterday"></div>
-  </section>
-
-  <script src="https://widget.antrika.com/app.js"></script>
+  <script src="https://<your-widget-host>/app.js"></script>
   <script>
-    fetch('/me/tableai-token').then(r => r.json()).then(({ token }) => {
-      window.antrika('renderTableAI', {
-        widgetId: 'agt_xxx',
-        ssoToken: token
+    // your endpoint returns a JWT minted with the tenant SSO key (see Auth)
+    fetch('/me/tableai-token', { credentials: 'include' })
+      .then(r => r.json())
+      .then(({ token, customerId }) => {
+        window.antrika('syncUser', { customerId, token }, () => {
+          window.antrika('renderTableAI', {
+            widgetId:        'agt_xxx',
+            remoteSessionId: 'report:attendance:2026-05-08:cust-123'
+          });
+        });
       });
-    });
   </script>
 </body>
 </html>
 ```
 
-The `/me/tableai-token` endpoint is yours — it returns a JWT minted as in the [auth section](#auth--minting-the-sso-token).
+The `/me/tableai-token` endpoint is yours — it returns a JWT minted as in the
+[auth section](#step-1--mint-the-sso-token-server-side).

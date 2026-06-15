@@ -13,7 +13,7 @@ You forgot the `apiKey` header. Browsers won't send it automatically — set it 
 Key is wrong, deleted, or for a different tenant.
 
 ```bash
-curl -i -X POST '$BASE/emp/1/api/tableai/apikey/validate' \
+curl -i -X POST '$BASE/emp/1/api/tableai/extension/validate' \
   -H 'apiKey: ak_live_…' -H 'Origin: $ORIGIN' -d '{}'
 ```
 
@@ -38,11 +38,12 @@ The tenant is suspended. Contact your account manager.
 
 ### `403 This feature is not available at the moment`
 
-Plan-bound. The customer is missing one of:
+Plan-bound. The customer is missing one of the plan flags:
 
-- Base TableAI access (required for any surface).
-- API access (required for `/api/tableai/*` API-key routes).
-- Widget access (required for `/api/tableai/widget/*` JWT routes).
+- `agent-data-query` — base module, required for any surface.
+- `apiAccess` — required for the `/api/tableai/*` API-key routes.
+- `widgetIntegration` — required for the `/api/tableai/widget/*` routes.
+- `singleSignOn` — required for widget chat/init and all `/v2` routes.
 
 Check with admin → Billing.
 
@@ -150,14 +151,28 @@ If still empty, check `body.s` and `body.ed`.
 
 Expected. KPI/chart widgets ignore `offset`/`limit` server-side and don't return `total`/`hm`. Don't render pagination UI for non-table widgets.
 
-## JWT (widget)
+## Widget SSO
 
-### `401 Invalid SSO token`
+### Widget loads but `init` / `chat` fails with auth errors
+
+The `antrikaSSO` session cookie is missing or expired. Make sure `syncUser` ran and
+succeeded *before* you called `renderTableAI` (mount in its callback). If `syncUser`
+returns an SSO error, the token is the problem — see below.
+
+### `syncUser` rejected the token (SSO data incomplete / Sso token failed)
 
 - Check expiry — `exp` claim is in unix seconds, not milliseconds.
-- Check signing algorithm — must be `HS256` with the agent's secret.
-- Check that the `companies[]` claim has at least one entry with `id` and `name`.
-- The signing key must be the **agent's secret** (admin → Show secret), not the API key string.
+- Check signing algorithm — must be `HS256` with the tenant **SSO signing key**
+  (admin → SSO settings), **not** the agent API key.
+- Check the user-id claim is `id` (not `sub`).
+- Check the `companies[]` claim has at least one entry with `id` **and** `name`.
+- Check you passed the correct `customerId` (the token is validated against that
+  tenant's SSO settings).
+
+### `widget_id` missing → requests fail auth
+
+The widget signs each request using `widget_id`. Always pass `widgetId` to
+`renderTableAI` and set the matching `data-id` on the mount div.
 
 ## Networking / infra
 
@@ -169,16 +184,18 @@ Safari requires the response to start within ~30s or it gives up. If your agent 
 
 Check you're hitting the right route for your auth mode:
 
-- `/api/tableai/{init,upload,chat}` — API-key routes (Chrome extension, Excel add-in, server-to-server).
-- `/api/tableai/widget/{init,upload,chat}` — JWT routes (JS widget).
+- `/api/tableai/{init,upload,chat}` — API-key routes (Chrome extension, server-to-server).
+- `/api/tableai/widget/{init,upload,chat}` — Widget SSO routes (JS widget).
+- `/api/tableai/extension/{validate,domains}` — extension activation (replaces the
+  old `apikey/validate`).
 
-The two sets are not interchangeable — wrong route + right auth = 401 or 404.
+The route sets are not interchangeable — wrong route + right auth = 401 or 404.
 
 ## Still stuck?
 
-Contact your tenant administrator or the TableAI support channel with:
+Contact your tenant administrator or the tableArth.ai support channel with:
 
-- The surface (widget / extension / excel / api).
+- The surface (widget / extension / api).
 - The full request URL, method, and headers (redact the apiKey/JWT).
 - The full response body (`ed`, `msg`, `s`).
 - Browser + version (for browser-side issues).

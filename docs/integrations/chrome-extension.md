@@ -1,30 +1,42 @@
 # Chrome Extension Integration
 
-The TableAI Chrome extension lets end users analyse any HTML table they encounter on the web — internal dashboards, third-party reports, anything with rows and columns.
+The tableArth.ai Chrome extension lets end users analyse any HTML table they
+encounter on the web — internal dashboards, third-party reports, anything with
+rows and columns.
 
 ## End-user setup
 
-1. **Install** — install from the Chrome Web Store, or load an unpacked build via `chrome://extensions` → *Developer mode* → *Load unpacked*.
+1. **Install** — install from the Chrome Web Store, or load an unpacked build via
+   `chrome://extensions` → *Developer mode* → *Load unpacked*.
 2. **Activate** — the options page opens on first install. The user pastes:
+   - **Base URL** — their tenant's tableArth.ai host (e.g. `https://yourcompany.antrika.com`).
    - **Activation Key** — an API key issued by their tenant admin.
-   - **Base URL** — their tenant's TableAI host (e.g. `https://yourcompany.antrika.com`).
-3. **Allow domains** — open *Options* and add hostnames where TableAI badges should appear (the extension is opt-in per domain to keep it off random sites).
-4. **Use it** — visit any allowed page; each detected table gets a ✨ badge in its top-right corner. Click → analysis panel opens.
+3. **Use it** — visit a page whose origin is allowed for the key; each detected
+   table gets a ✨ badge in its top-right corner. Click → analysis panel opens.
+
+The allow-list is **managed on the backend** (the agent's Origin list), not in the
+extension — see [Domain allow-list](#domain-allow-list).
 
 ## Architecture
 
-The extension is a standard Chrome MV3 extension with three moving parts:
+A standard Chrome MV3 extension with four moving parts:
 
-- **Content script** — scans the DOM for tables and renders the floating ✨ badges. No table data leaves the page until the user clicks.
-- **Service worker** — handles all network access so content scripts stay CORS-clean. Stores the activation key and allowed domains.
-- **Panel** — chat UI that opens as an iframe overlay when a badge is clicked.
+- **Service worker** (`background.js`) — handles all network access so content
+  scripts stay CORS-clean. Stores the activation key and base URL; caches the
+  allow-list.
+- **Content script** — scans the DOM for tables and renders the floating ✨ badges.
+  Handles plain `<table>`, Ant Design tables, and ARIA grids (MUI/AG Grid).
+  No table data leaves the page until the user clicks.
+- **Options page** — first-run activation (base URL + key); shows the allowed
+  domains read-only.
+- **Panel** — chat UI injected as an **iframe overlay** when a badge is clicked.
 
 ## Data flow
 
 ```
 content script
     │
-    │  scans DOM for tables, draws badges. No data leaves the page yet.
+    │  scans DOM for tables (≥ 20 rows × 2 cols), draws badges. No data leaves yet.
     │
     │  user clicks a badge
     │  ─► extract the selected table to RFC-4180 CSV
@@ -44,9 +56,10 @@ service worker
     │     stream tokens back to the panel iframe
 ```
 
-Endpoints used by the extension (API-key authenticated):
+Endpoints used by the extension (all API-key authenticated, `apiKey` header):
 
-- `POST /emp/1/api/tableai/apikey/validate`
+- `POST /emp/1/api/tableai/extension/validate`
+- `GET  /emp/1/api/tableai/extension/domains`
 - `GET  /emp/1/api/tableai/init`
 - `OPTIONS+POST /emp/1/api/tableai/upload`
 - `POST /emp/1/api/tableai/chat`
@@ -58,38 +71,63 @@ Full request/response shapes: [api/endpoints.md](../api/endpoints.md).
 ## Auth model
 
 - **API key** in the `apiKey` header on every request.
-- The agent's Origin allow-list applies; the extension sends a synthetic Origin built from the host page so admins can scope keys to specific external domains if they want to.
+- The agent's Origin allow-list applies. For pages, the extension sends the host
+  page as the request `webpage`, so admins can scope a key to specific external
+  domains.
 
-The activation key never leaves `chrome.storage.local` except as the `apiKey` header on requests to the configured base URL.
+The activation key never leaves `chrome.storage.local` except as the `apiKey`
+header on requests to the configured base URL.
+
+## Domain allow-list
+
+Where badges appear is controlled by the **backend**, not a per-user toggle:
+
+- On each page the content script asks the service worker whether the current
+  origin is allowed.
+- The service worker fetches the allow-list once via
+  `GET /emp/1/api/tableai/extension/domains` and caches it (~5 min). The response
+  is `{ allowAll, domains: [patterns] }`; `allowAll:true` means any origin.
+- Patterns support `*` globs (`https://*.example.com`). Badges render only on
+  matching origins.
+
+To change where the extension works, an admin edits the agent's Origin allow-list
+(see [agent setup](../admin/agent-setup.md#step-2--origin-allow-list)).
 
 ## Privacy
 
-- Tables are scanned client-side to render badges. **No table data is sent until the user clicks a badge.**
-- On first click, the CSV is uploaded to `/api/tableai/upload`. After that, queries fly without re-uploading.
-- The activation key, allowed domains, and remote session IDs persist in `chrome.storage.local`. Nothing else.
+- Tables are scanned client-side to render badges. **No table data is sent until
+  the user clicks a badge.**
+- On first click, the CSV is uploaded to `/api/tableai/upload`. After that,
+  queries fly without re-uploading.
+- The activation key, base URL, cached allow-list, and remote session IDs persist
+  in `chrome.storage.local`. Nothing else.
 
 ## What the user can do in the panel
 
 - Ask any natural-language question against the table — streaming text answer.
 - See inline charts when the agent returns a `CHART` event.
-- Switch to the **Dashboard** tab — KPI cards + charts + paginated source table, generated by the backend the first time.
-- Download the source table as CSV.
+- Switch to the **Dashboard** tab — KPI cards + charts + paginated source table,
+  generated by the backend the first time.
+- Export the conversation / dashboard to PDF.
 
 ## Customising for your tenant
 
-Most tenants use the standard build. If you need to fork, the configurable surfaces are:
+Most tenants use the standard build. If you fork:
 
-- **Endpoint paths** can be overridden via `chrome.storage.local.endpoints` if your deployment routes differently from the defaults.
+- **Endpoint paths** can be overridden via `chrome.storage.local.endpoints` if your
+  deployment routes differently from the defaults.
 - **Branding** — replace icon files and panel styles before publishing.
-- **Minimum table size for a badge** (rows × cols) is configurable in the build — bump it if your users see too many noisy badges on data-heavy pages.
+- **Minimum table size for a badge** (rows × cols) is configurable in the build —
+  bump it if your users see too many noisy badges on data-heavy pages.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| No badges appear | Domain not in the allow-list (Options → Allowed Domains). |
+| No badges appear | Current origin isn't in the agent's allow-list. Admin → agent Origins. |
 | Badge appears but click does nothing | Activation key invalid or expired — popup will say *Inactive*. |
 | `403 Not authorised` | The agent's Origin allow-list doesn't include the host page's origin. |
-| Streaming stops mid-answer | Browser killed the SSE connection (sleep, network change). Resend the question. |
+| Panel never loads on a page | The site's CSP blocks `chrome-extension://` frames (`frame-src`). |
+| Streaming stops mid-answer | Browser killed the SSE connection (sleep, network change). Resend. |
 
 More in [troubleshooting.md](../troubleshooting.md).

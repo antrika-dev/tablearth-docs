@@ -1,28 +1,37 @@
 # Endpoint Reference
 
-Every public TableAI route, grouped by auth mode. All paths are relative to the tenant base URL (e.g. `https://yourcompany.antrika.com`).
+Every public tableArth.ai route, grouped by auth mode. All paths are relative to
+the tenant base URL (e.g. `https://yourcompany.antrika.com`). The brand is
+tableArth.ai; the path slug stays `tableai`.
 
 ## Quick index
 
 | Path | Method | Auth | Used by |
 |---|---|---|---|
-| `/emp/1/api/tableai/apikey/validate` | POST | API key | Chrome extension, Excel add-in |
-| `/emp/1/api/tableai/init` | GET | API key | Chrome extension, Excel add-in, server-to-server |
+| `/emp/1/api/tableai/extension/validate` | POST | API key | Chrome extension |
+| `/emp/1/api/tableai/extension/domains` | GET | API key | Chrome extension |
+| `/emp/1/api/tableai/init` | GET | API key | Chrome extension, server-to-server |
 | `/emp/1/api/tableai/upload` | OPTIONS / POST | API key | same |
 | `/emp/1/api/tableai/chat` | POST | API key | same |
-| `/emp/1/api/tableai/widget/init` | GET | JWT (`agentId` + `ssoToken`) | JS widget |
-| `/emp/1/api/tableai/widget/upload` | OPTIONS / POST | JWT (`agentId` + `ssoToken`) | JS widget |
-| `/emp/1/api/tableai/widget/chat` | POST | JWT (`agentId` + `ssoToken`) | JS widget |
-| `/emp/1/api/dashboard/spec` | POST | API key | Chrome extension, Excel add-in |
-| `/emp/1/api/dashboard/widget/data` | POST | API key | Chrome extension, Excel add-in |
+| `/emp/1/api/tableai/init/v2` | GET | API key + `ssoToken` | server-to-server (per-user) |
+| `/emp/1/api/tableai/upload/v2` | OPTIONS / POST | API key + `ssoToken` | same |
+| `/emp/1/api/tableai/chat/v2` | POST | API key + `ssoToken` | same |
+| `/emp/1/api/tableai/widget/init` | GET | Widget SSO (`widget_id` + cookie) | JS widget |
+| `/emp/1/api/tableai/widget/upload` | OPTIONS / POST | Widget SSO | JS widget |
+| `/emp/1/api/tableai/widget/chat` | POST | Widget SSO | JS widget |
+| `/emp/1/api/tableai/widget/dashboard/spec` | GET | Widget SSO | JS widget |
+| `/emp/1/api/tableai/widget/dashboard/widget/data` | POST | Widget SSO | JS widget |
+| `/emp/1/api/dashboard/spec` | POST | API key | Chrome extension, server-to-server |
+| `/emp/1/api/dashboard/widget/data` | POST | API key | Chrome extension, server-to-server |
 
 ## API-key endpoints
 
-Used by the Chrome extension, Excel add-in, and any direct REST client.
+Used by the Chrome extension and any direct REST client.
 
-### `POST /emp/1/api/tableai/apikey/validate`
+### `POST /emp/1/api/tableai/extension/validate`
 
-Lightweight ping for clients to validate their key before unlocking UI.
+Validate an activation key before unlocking UI. (Replaces the old
+`apikey/validate` route.)
 
 **Request**
 
@@ -35,8 +44,22 @@ Content-Type: application/json
 ```
 
 **Success** — `200 { s: true }` (plus standard envelope fields).
+**Failure** — see [auth.md](auth.md#failure-responses). Rate-limited per IP (`429`).
 
-**Failure** — see [auth.md](auth.md#failure-responses).
+### `GET /emp/1/api/tableai/extension/domains`
+
+Returns the backend-managed Origin allow-list for this key, so a client can show
+the user where it will activate.
+
+**Response**
+
+```jsonc
+{
+  "s": true,
+  "allowAll": false,                       // true → key works on any origin
+  "domains": [ "https://*.example.com" ]   // patterns; `*` is a glob
+}
+```
 
 ### `GET /emp/1/api/tableai/init`
 
@@ -64,15 +87,16 @@ Open or resume a session by `remoteSessionId`.
   "sessionData": {
     "sessionId":     "ses_abc123",
     "fileAvailable": true,
-    "title":         "Attendance Yesterday"
+    "title":         "Attendance Yesterday",
+    "source":        "Extension",          // API | Widget | Extension | Admin
+    "readOnly":      true                  // true for any non-admin source
   },
   "data": [ /* past messages, newest-first */
     {
       "id":          "msg_…",
-      "messageType": "received",          // received = user, sent = assistant
       "message":     "Who worked the most?",
-      "answer":      null,
-      "chartData":   null,
+      "messageType": "received",           // received = user, sent = assistant
+      "chartData":   null,                 // present only on chart answers
       "chartConfig": null
     }
   ],
@@ -82,14 +106,20 @@ Open or resume a session by `remoteSessionId`.
 
 **Notes**
 
-- If no session exists for the `remoteSessionId`, one is created and returned with `fileAvailable=false`.
+- If no session exists for the `remoteSessionId`, one is created and returned with
+  `fileAvailable=false`.
 - Messages come back **newest-first**. Reverse if you display chronologically.
+- The answer text is in **`message`** (there is no `answer` field on history
+  items). `messageType: "sent"` = assistant, `"received"` = user.
 
 ### `OPTIONS /emp/1/api/tableai/upload`
 
-CORS preflight. Echoes Origin, allows POST + multipart headers. Always call before `POST` from a browser.
+CORS preflight. Echoes Origin, allows POST + multipart headers. Always call before
+`POST` from a browser.
 
-The preflight requires the `apiKey` to be present **as a query parameter** (browsers can't send custom headers on preflight). The `POST` itself can use either the header or the query parameter.
+The preflight requires the `apiKey` **as a query parameter** (browsers can't send
+custom headers on preflight). The `POST` itself can use either the header or the
+query parameter.
 
 ### `POST /emp/1/api/tableai/upload`
 
@@ -110,10 +140,10 @@ multipart/form-data:
 
 ```jsonc
 {
-  "s":        true,
-  "fileId":   "fil_xyz",
-  "rowCount": 42,
-  "columns":  ["Employee", "Hours", …]
+  "s":               true,
+  "tableFileId":     "fil_xyz",
+  "remoteSessionId": "tai-ext-…",
+  "dashboardSpec":   "<json string, or null while the dashboard job runs>"
 }
 ```
 
@@ -121,8 +151,9 @@ After this, `init` for the same `remoteSessionId` returns `fileAvailable=true`.
 
 **Notes**
 
-- Plan-bound size limit (default 25 MB).
-- Re-uploading into a session that already has a file returns `{ ed: "File already uploaded" }`. Mint a new `remoteSessionId` to start fresh.
+- Plan-bound size limit.
+- Re-uploading into a session that already has a file is rejected. Mint a new
+  `remoteSessionId` to start fresh.
 
 ### `POST /emp/1/api/tableai/chat`
 
@@ -134,12 +165,13 @@ Ask a question. Streaming or non-streaming.
 apiKey:  <your key>
 Origin:  <your origin>
 Content-Type: application/json
-Accept:       text/event-stream, application/json     // optional but recommended for stream
+Accept:       text/event-stream, application/json     // recommended for stream
 
-{ "data": { "sessionId": "ses_abc123", "query": "Who worked the most?", "stream": true } }
+{ "sessionId": "ses_abc123", "query": "Who worked the most?", "stream": true }
 ```
 
-> The body must be wrapped in a top-level `data` field as shown.
+> The API-key body is **flat** — not wrapped in `data`. (The widget route wraps
+> it; see below.)
 
 **Response, `stream:false`**
 
@@ -153,6 +185,7 @@ Accept:       text/event-stream, application/json     // optional but recommende
 ```
 
 **Response, `stream:true`** — Server-Sent Events. See [sse-protocol.md](sse-protocol.md).
+The session id is echoed on the `X-Session-Id` response header.
 
 **Failure**
 
@@ -162,28 +195,46 @@ Accept:       text/event-stream, application/json     // optional but recommende
 | `{ ed: "Invalid Session" }` | Session not found for the tenant. |
 | `{ ed: "File not available" }` | Session exists but no upload happened. |
 
+### `/v2` routes (per-user identity)
+
+`/emp/1/api/tableai/{init,upload,chat}/v2` mirror the routes above but also accept
+a host-minted `ssoToken` **JWT header** for per-user attribution. `init/v2`
+requires `ssoToken`. Gated by the single-sign-on plan feature. See
+[auth.md](auth.md#per-user-identity-on-api-routes-v2).
+
 ## Widget endpoints
 
-Used by the JS widget. Auth: `agentId` header + `ssoToken` JWT + Origin allow-list. Full auth detail in [auth.md](auth.md#jwt-in-ssotoken-header).
+Used by the JS widget. Auth: `widget_id` header/param + the `antrikaSSO` cookie +
+per-widget request signing (handled inside the widget bundle). Full auth detail in
+[auth.md](auth.md#widget-sso).
 
 ### `GET /emp/1/api/tableai/widget/init`
 
-Same shape as the API-key `init` above, with these header changes:
-
-| Header | Description |
-|---|---|
-| `agentId` | The agent ID (replaces `apiKey`). |
-| `ssoToken` | JWT identifying the visitor (account + user from claims). |
-
-Origin: comes from the browser; agent's allow-list applies.
+Same response shape as the API-key `init`. Identity (account + user) comes from the
+SSO session, so it does **not** read `customerId` / `userId` headers.
 
 ### `OPTIONS / POST /emp/1/api/tableai/widget/upload`
 
-Same as API-key `upload`; auth swapped (`agentId` + `ssoToken` instead of `apiKey`).
+Same as API-key `upload`; auth swapped to Widget SSO.
 
 ### `POST /emp/1/api/tableai/widget/chat`
 
-Same body shape as API-key `chat`. Source recorded as `WIDGET` in admin (vs `API` for direct REST).
+Same semantics as API-key `chat`, but the body is **wrapped**:
+
+```jsonc
+{ "data": { "sessionId": "ses_abc123", "query": "…", "stream": true } }
+```
+
+Source recorded as `Widget` in admin.
+
+### Widget dashboard
+
+The widget has its **own** dashboard routes (distinct from `/api/dashboard/*`):
+
+- `GET  /emp/1/api/tableai/widget/dashboard/spec` — `sessionId` via header.
+- `POST /emp/1/api/tableai/widget/dashboard/widget/data` — body wrapped in `data`.
+
+Response shapes match the [dashboard endpoints](#dashboard-endpoints) below.
 
 ## Dashboard endpoints
 
@@ -208,7 +259,7 @@ Content-Type: application/json
 ```jsonc
 {
   "s":     true,
-  "ready": true,             // false while the background job is still running
+  "ready": true,                 // false while the background job is still running
   "dashboardSpec": "<json string — parse client-side>"
 }
 ```
@@ -218,16 +269,18 @@ The spec, once parsed, has roughly:
 ```jsonc
 {
   "kpis":   [ { id, title, value, format, … } ],
-  "charts": [ { id, title, type: "bar|line|pie", x, y, … } ],
+  "charts": [ { id, title, type: "bar|line|pie", … } ],
   "tables": [ { id, title, columns: [ … ] } ]
 }
 ```
 
-`ready=false` is a normal initial state. Show a placeholder; refetch on tab switch or on a short interval.
+`ready=false` is a normal initial state. Show a placeholder; refetch on tab switch
+or on a short interval.
 
 ### `POST /emp/1/api/dashboard/widget/data`
 
-Fetch the data for a single widget in the dashboard spec. Charts/KPIs typically return everything in one call; tables paginate.
+Fetch the data for a single widget in the dashboard spec. Charts/KPIs typically
+return everything in one call; tables paginate.
 
 **Request**
 
@@ -240,7 +293,7 @@ Content-Type: application/json
   "sessionId": "ses_abc123",
   "widgetId":  "wgt_table_main",
   "offset":    0,        // tables only
-  "limit":     50        // tables only
+  "limit":     50        // tables only (default 100)
 }
 ```
 
@@ -248,21 +301,22 @@ Content-Type: application/json
 
 ```jsonc
 {
-  "s":     true,
-  "data":  [ /* array of row objects, OR a JSON-encoded string of the same */ ],
-  "total": 1234,         // tables only — total row count for pagination
-  "hm":    true          // tables only — hasMore
+  "s":      true,
+  "data":   "[ … ]",      // rows, often a JSON-encoded STRING — detect and parse
+  "total":  1234,         // tables only — total row count for pagination
+  "hm":     true,         // tables only — hasMore
+  "capped": false         // true when the result set was truncated
 }
 ```
 
-> Some legacy responses encode `data` as a JSON string. Clients should detect-and-parse:
+> `data` is frequently a JSON string. Clients should detect-and-parse:
 > ```js
 > if (typeof body.data === 'string') body.data = JSON.parse(body.data);
 > ```
 
 ## Pagination headers
 
-Several endpoints (`/init`, `/widget/init`) accept generic pagination headers:
+`/init` and `/widget/init` accept generic pagination headers:
 
 | Header | Description |
 |---|---|
