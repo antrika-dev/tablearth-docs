@@ -48,7 +48,7 @@ const fetch = require('node-fetch');
 const FormData = require('form-data');
 const crypto = require('crypto');
 
-const BASE   = 'https://yourcompany.antrika.com';
+const BASE   = 'https://yourcompany.tableArth.ai';
 const APIKEY = process.env.TABLEAI_API_KEY;
 
 const HEADERS = {
@@ -150,7 +150,7 @@ Stream framing reference: [api/sse-protocol.md](../api/sse-protocol.md).
 
 ```java
 HttpClient http = HttpClient.newHttpClient();
-String base = "https://yourcompany.antrika.com";
+String base = "https://yourcompany.tableArth.ai";
 String apiKey = System.getenv("TABLEAI_API_KEY");
 
 String csv = "Employee,Hours\nAlice,8\nBob,7\nCarol,9";

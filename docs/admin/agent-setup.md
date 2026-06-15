@@ -78,7 +78,7 @@ Validate an API key from the command line before handing it over:
 
 ```bash
 curl -i \
-  -X POST 'https://yourcompany.antrika.com/emp/1/api/tableai/extension/validate' \
+  -X POST 'https://yourcompany.tableArth.ai/emp/1/api/tableai/extension/validate' \
   -H 'apiKey: ak_live_…' \
   -H 'Origin: https://app.example.com' \
   -H 'Content-Type: application/json' \
@@ -93,7 +93,7 @@ Common failures and what they mean: [troubleshooting.md](../troubleshooting.md).
 
 Give the integrating developer:
 
-- The base URL (e.g. `https://yourcompany.antrika.com`).
+- The base URL (e.g. `https://yourcompany.tableArth.ai`).
 - The **agent ID** (`agentId` / `widgetId`).
 - For API-key consumers (extension, server-to-server): the **raw key**.
 - For the JS widget: the **tenant / customer ID** and tell them to ask their

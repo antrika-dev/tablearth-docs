@@ -9,7 +9,7 @@ rows and columns.
 1. **Install** — install from the Chrome Web Store, or load an unpacked build via
    `chrome://extensions` → *Developer mode* → *Load unpacked*.
 2. **Activate** — the options page opens on first install. The user pastes:
-   - **Base URL** — their tenant's tableArth.ai host (e.g. `https://yourcompany.antrika.com`).
+   - **Base URL** — their tenant's tableArth.ai host (e.g. `https://yourcompany.tableArth.ai`).
    - **Activation Key** — an API key issued by their tenant admin.
 3. **Use it** — visit a page whose origin is allowed for the key; each detected
    table gets a ✨ badge in its top-right corner. Click → analysis panel opens.

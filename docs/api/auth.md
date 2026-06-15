@@ -27,7 +27,7 @@ The simplest mode. Issued per agent, scoped by Origin and/or IP allow-list.
 
 ```
 POST /emp/1/api/tableai/chat HTTP/1.1
-Host:    yourcompany.antrika.com
+Host:    yourcompany.tableArth.ai
 apiKey:  ak_live_4f8c2e7d9b1a6c3e5f8d2b9a4e7c1f6d
 Origin:  https://your-app.example.com
 Content-Type: application/json
@@ -96,7 +96,7 @@ Optional: `thumb` (avatar URL), `timezone`, `tags` (string array),
 
 ```
 GET /emp/1/api/tableai/widget/init?widget_id=agt_xxx&ssoToken=<cookie>&tlp-k=<sig>&tlp-t=<ts> HTTP/1.1
-Host:     yourcompany.antrika.com
+Host:     yourcompany.tableArth.ai
 widget_id: agt_xxx
 Origin:    https://your-app.example.com
 Cookie:    antrikaSSO=eyJhbGciOiJIUzI1NiJ9…

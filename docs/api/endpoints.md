@@ -1,7 +1,7 @@
 # Endpoint Reference
 
 Every public tableArth.ai route, grouped by auth mode. All paths are relative to
-the tenant base URL (e.g. `https://yourcompany.antrika.com`). The brand is
+the tenant base URL (e.g. `https://yourcompany.tableArth.ai`). The brand is
 tableArth.ai; the path slug stays `tableai`.
 
 ## Quick index
